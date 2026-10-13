@@ -19,9 +19,10 @@
     }
     return out.sort((a,b)=>a.at-b.at);
   }
-  function desired(c,now,override){
+  function desired(c,now,override,armedAt=null){
     if(override&&now.getTime()<override.until) return {power:0,key:'hold:'+override.until,until:override.until};
     const e=events(c,now).filter(e=>e.at<=now.getTime()).pop();
+    if(armedAt!==null&&e.at<=armedAt) return null;
     return {power:e.phase==='off'?0:1,temp:e.phase==='pre'?c.cold:c.normal,key:e.phase+':'+e.at};
   }
   function nextRestart(c,now){return events(c,now).find(e=>e.phase==='restart'&&e.at>now.getTime()).at;}

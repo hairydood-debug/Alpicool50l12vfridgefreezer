@@ -3,6 +3,8 @@
   const key='fridge-night-v1';
   let saved={config:{...NightSchedule.defaults},enabled:false,override:null,device:null};
   try{const data=JSON.parse(localStorage.getItem(key)); if(data){NightSchedule.validate(data.config);saved={...saved,...data};}}catch(_){}
+  // Older saved schedules start waiting from this upgrade rather than applying past events.
+  if(saved.armedAt!==null&&!Number.isFinite(saved.armedAt)){saved.armedAt=Date.now();localStorage.setItem(key,JSON.stringify(saved));}
   let working=false,applied='',message='';
   const persist=()=>localStorage.setItem(key,JSON.stringify(saved));
   const status=document.getElementById('night-status');
@@ -18,7 +20,12 @@
     if(!saved.enabled&&!saved.override){render();return;}
     if(!Fridge.isConnected()){applied='';message='';render();return;}
     if(saved.device!==Fridge.deviceId()){message='This schedule belongs to another fridge. Save settings to use this fridge.';render();return;}
-    const d=NightSchedule.desired(saved.config,new Date(),saved.override);
+    const d=NightSchedule.desired(saved.config,new Date(),saved.override,saved.armedAt);
+    if(!d){
+      const next=NightSchedule.events(saved.config,new Date()).find(e=>e.at>Date.now());
+      message='Schedule armed. Fridge unchanged until '+next.phase+' at '+new Date(next.at).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'})+'.';
+      render();return;
+    }
     if(!saved.enabled&&!saved.override){render();return;}
     d.key += ':'+Fridge.connectionVersion();
     if(applied===d.key){render();return;}
@@ -37,14 +44,14 @@
       NightSchedule.validate(c);
       const enabled=document.getElementById('night-enabled').checked;
       if(enabled&&!Fridge.isConnected()) throw Error('Connect your fridge before enabling Night Mode.');
-      saved.config=c;saved.enabled=enabled;saved.device=Fridge.deviceId()||saved.device;saved.override=null;applied='';message='';persist();tick();
+      saved.config=c;saved.enabled=enabled;saved.device=Fridge.deviceId()||saved.device;saved.override=null;saved.armedAt=Date.now();applied='';message='';persist();tick();
     }catch(e){message=e.message;render();}
   };
   for(const type of ['snooze','bedtime']) document.getElementById('night-'+type).onclick=()=>{
     if(working) return;
     if(!Fridge.isConnected()){message='Connect your fridge first.';render();return;}
     // These controls also arm the saved daily schedule, so expiry/restart is unambiguous.
-    saved.enabled=true;saved.device=Fridge.deviceId();
+    saved.enabled=true;saved.device=Fridge.deviceId();saved.armedAt=null;
     saved.override={until:type==='snooze'?Date.now()+3600000:NightSchedule.nextRestart(saved.config,new Date())};
     document.getElementById('night-enabled').checked=true;applied='';message='';persist();tick();
   };
