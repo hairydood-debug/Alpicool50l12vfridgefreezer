@@ -25,6 +25,11 @@ This project provides specific guidelines and docs for AI assistants to collabor
 
 ---
 
+## Night Mode
+
+Configurable 21:00 pre-cool (1°C), 22:00 OFF, 01:00 restart (4°C), Snooze and Bedtime.
+See [NIGHT_MODE.md](NIGHT_MODE.md) for setup and Android background limitations.
+
 ## Features
 
 **Home** — both devices at a glance, each with its own connect/disconnect.
@@ -47,7 +52,7 @@ snapshot/change-recorder, and the live power-station register table.
 ## Use it
 
 ### On your Pixel 9 Pro XL (recommended)
-1. Open **`https://dandwhelan.github.io/Alpicool50l12vfridgefreezer/`** in **Chrome**
+1. Open **`https://hairydood-debug.github.io/Alpicool50l12vfridgefreezer/`** in **Chrome**
    *(enable GitHub Pages first — see below)*.
 2. Turn on Bluetooth, stay in range.
 3. Go to **Home**, tap **Connect** on the fridge and/or the power station (use "show all devices"

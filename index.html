@@ -232,6 +232,22 @@ select{background:var(--bg-input); color:var(--text-main); border:1px solid var(
         </div>
       </div>
     </div>
+    <div class="card">
+      <h2>🌙 Night Mode</h2>
+      <p class="muted">Fridge power OFF means both zones stop cooling. Freezer target is preserved. No temperature-triggered restart.</p>
+      <label><input type="checkbox" id="night-enabled"> Enable daily schedule</label>
+      <div class="row"><label for="night-pre">Pre-cool</label><input id="night-pre" type="time" value="21:00"></div>
+      <div class="row"><label for="night-cold">Pre-cool target °C</label><input id="night-cold" type="number" min="-20" max="20" value="1"></div>
+      <div class="row"><label for="night-off">Completely off</label><input id="night-off" type="time" value="22:00"></div>
+      <div class="row"><label for="night-restart">Restart</label><input id="night-restart" type="time" value="01:00"></div>
+      <div class="row"><label for="night-normal">Restart target °C</label><input id="night-normal" type="number" min="-20" max="20" value="4"></div>
+      <button class="btn primary" id="night-save">Save settings</button>
+      <div class="row"><button class="btn" id="night-snooze">Snooze OFF · 1 hour</button><button class="btn" id="night-bedtime">Bedtime · OFF now</button></div>
+      <p class="muted">Snooze and Bedtime enable this daily schedule. Snooze stays off longer if it ends during the scheduled off period. Bedtime holds off until the next restart.</p>
+      <button class="btn" id="night-cancel">Cancel automation</button>
+      <p id="night-status" role="status" aria-live="polite"></p>
+      <p class="dangerbox">Keep this page visible, phone awake and Bluetooth connected. Android may suspend it when locked or in the background. Installing the app does not guarantee timed restarts. On return, it applies the current phase, so a missed restart happens late. OFF remains OFF until a command turns it on.</p>
+    </div>
   </section>
 
   <!-- ===================== FRIDGE SETTINGS ===================== -->
@@ -414,6 +430,7 @@ const Fridge = (()=>{
 
   let dev=null,writeCh=null,notifyCh=null,connected=false,poll=null;
   let busy=Promise.resolve(), lastStatus=null, lastPayload=null, settings=null, snapshot=null, sizeLogged=false;
+  let lastSeen=0, connectionVersion=0;
   let byteChangeAt=null; // per-index ms timestamp of last observed change, for on-site liveness debugging
 
   function buildFrame(payload){
@@ -474,16 +491,16 @@ const Fridge = (()=>{
     q[9]=toF?1:0; return q;
   }
   // Fridge needs 20-byte writes (default MTU); it reassembles by the LEN byte.
-  function send(payload){
-    busy=busy.then(async ()=>{
-      if(!writeCh) return;
+  function send(payload, strict=false){
+    busy=busy.catch(()=>{}).then(async ()=>{
+      if(!writeCh){ if(strict) throw Error('Fridge disconnected'); return; }
       const f=buildFrame(payload);
       try{
         for(let i=0;i<f.length;i+=20){
           const m=await smartWrite(writeCh,f.slice(i,i+20));
           if(i===0) log('tx',`F→ ${hex(f)} (${m}${f.length>20?', chunked':''})`);
         }
-      }catch(e){ log('er','Fridge TX FAILED: '+e.message); }
+      }catch(e){ log('er','Fridge TX FAILED: '+e.message); if(strict) throw e; }
       await sleep(160);
     });
     return busy;
@@ -508,7 +525,7 @@ const Fridge = (()=>{
     if(!f.ok){ log('er','  ↳ fridge checksum mismatch'); return; }
     const full=(f.cmd===CMD.QUERY||f.cmd===CMD.SET||f.cmd===CMD.SET_RIGHT) && f.payload.length>=18;
     if(full){
-      lastPayload=f.payload; lastStatus=parseStatus(f.payload);
+      lastPayload=f.payload; lastStatus=parseStatus(f.payload); lastSeen=Date.now();
       if(!sizeLogged){ log('in',`  ↳ status payload = ${f.payload.length} bytes · ${lastStatus.dual?'dual':'single'}-zone · model ${lastStatus.model}`); sizeLogged=true; }
       updateUI(); renderBytes();
     } else {
@@ -531,7 +548,7 @@ const Fridge = (()=>{
       notifyCh=await svc.getCharacteristic(NOTIFY);
       await notifyCh.startNotifications();
       notifyCh.addEventListener('characteristicvaluechanged',onNotify);
-      connected=true; sizeLogged=false; rxBuf=[]; setState('on',dev.name||'Connected'); enable(true);
+      connectionVersion++; lastPayload=null; lastStatus=null; lastSeen=0; connected=true; sizeLogged=false; rxBuf=[]; setState('on',dev.name||'Connected'); enable(true);
       const wp=Object.entries(writeCh.properties).filter(([,v])=>v).map(([k])=>k).join(',');
       log('in','Fridge connected: '+(dev.name||'device')+' · write char ['+wp+']');
       await send([CMD.QUERY]);
@@ -574,6 +591,26 @@ const Fridge = (()=>{
     await send([CMD.QUERY]);
   }
 
+  async function applyNight(d){
+    if(!connected||!lastPayload||Date.now()-lastSeen>10000) throw Error('Waiting for fresh fridge status');
+    const device=dev.id, over={1:d.power};
+    let target;
+    if(d.power){
+      target=lastStatus.unit==='F'?Math.round(d.temp*1.8+32):d.temp;
+      if(target<lastStatus.L_min||target>lastStatus.L_max) throw Error('Target outside this fridge’s limits');
+      over[4]=target;
+    }
+    const before=lastSeen;
+    await send(buildSet(lastPayload,over),true);
+    await send([CMD.QUERY],true);
+    const deadline=Date.now()+5000;
+    while(Date.now()<deadline){
+      if(!connected||dev.id!==device) throw Error('Fridge disconnected');
+      if(lastSeen>before&&lastStatus.powered===!!d.power&&(!d.power||lastStatus.L_target===target)) return;
+      await sleep(100);
+    }
+    throw Error('Fridge did not confirm power/target');
+  }
   /* UI */
   function setState(state,text){
     setDot($('f-dot'),state); $('f-text').textContent=text;
@@ -615,7 +652,7 @@ const Fridge = (()=>{
   }
   function setSeg(id,v){ document.querySelectorAll('#'+id+' button').forEach(b=>b.classList.toggle('active',Number(b.dataset.v)===Number(v))); }
 
-  return { connect, disconnect, isConnected:()=>connected, setLeftTarget, setRightTarget, stepLeft, stepRight, setByte, setUnit,
+  return { applyNight, connectionVersion:()=>connectionVersion, deviceId:()=>dev?.id, connect, disconnect, isConnected:()=>connected, setLeftTarget, setRightTarget, stepLeft, stepRight, setByte, setUnit,
            bind:()=>send([CMD.BIND]), sendRaw:bytes=>send(bytes), snapshot:()=>{ if(lastPayload){snapshot=Uint8Array.from(lastPayload); renderBytes(); log('in','Fridge snapshot taken.');} },
            clearSnap:()=>{ snapshot=null; renderBytes(); }, hasStatus:()=>!!lastStatus };
 })();
@@ -880,5 +917,7 @@ if(isStandalone()){
   $('install-text').textContent='Install SmartVan to launch it full-screen and use it offline.';
 }
 </script>
+<script src='./night-schedule.js'></script>
+<script src='./night-mode.js'></script>
 </body>
 </html>
